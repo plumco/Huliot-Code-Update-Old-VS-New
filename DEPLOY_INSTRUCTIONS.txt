@@ -1,0 +1,89 @@
+═══════════════════════════════════════════════════════════
+  HULIOT CODE UPDATER — DEPLOYMENT INSTRUCTIONS
+  For Umesh | PVL Ltd
+═══════════════════════════════════════════════════════════
+
+STEP 1 — GITHUB (One time only)
+────────────────────────────────
+1. Go to: https://github.com
+2. Sign up / Log in (free)
+3. Click "New Repository"
+4. Name it: huliot-code-updater
+5. Click "Create Repository"
+6. Upload these 3 files:
+   • app.py
+   • requirements.txt
+   • .streamlit/config.toml
+
+STEP 2 — STREAMLIT CLOUD (One time only)
+──────────────────────────────────────────
+1. Go to: https://share.streamlit.io
+2. Sign in with your GitHub account
+3. Click "New App"
+4. Select your repository: huliot-code-updater
+5. Main file: app.py
+6. Click "Deploy"
+7. Wait 2-3 minutes → your app is LIVE
+
+STEP 3 — USE IT FOREVER
+─────────────────────────
+You get a link like:
+  https://huliot-code-updater.streamlit.app
+
+Save this link. Open it anytime on any device.
+Upload old BOQ → Download updated BOQ. Done.
+
+═══════════════════════════════════════════════════════════
+  WHAT THE APP CHANGES
+═══════════════════════════════════════════════════════════
+
+ULTRA SILENT:
+  5754000050-i  →  5754040050-i  (DS Pipe L500 DN40)
+  5755000050-i  →  5755050050-i  (DS Pipe L500 DN50)
+  5757500050-i  →  5757575050-i  (DS Pipe L500 DN75)
+  5751100050-i  →  5751111050-i  (DS Pipe L500 DN110)
+  5751200050-i  →  5751212050-i  (DS Pipe L500 DN125)
+  5751600050-i  →  5751616050-i  (DS Pipe L500 DN160)
+  7070030470    →  7070030470-i  (Bend 45 DN75)
+  7070040470    →  7070040470-i  (Bend 45 DN110)
+  7070020870    →  7070020870-i  (Bend 87.5 DN50)
+  7070643470    →  7070643470-i  (Wye Branch 110x75)
+  7070644470    →  7070644470-i  (Wye Branch 110x110)
+  7071730275    →  7071730275-i  (OWS DN75)
+  7071740275    →  7071740275-i  (OWS DN110)
+  7071620070    →  7071620070-i  (End Cap DN50)
+  7071640070    →  7071640070-i  (End Cap DN110)
+  S11050505075  →  S11050505075-i (MFT with Ring)
+  60203651      →  60203651-i    (Height Riser Smart Lock)
+
+HT PRO:
+  40010460  →  40010460-i   (Bend 45 DN40)
+  40020460  →  40020460-i   (Bend 45 DN50)
+  40030460  →  40030460-i   (Bend 45 DN75)
+  40040460  →  40040460-i   (Bend 45 DN110)
+  40010860  →  40010860-i   (Bend 87.5 DN40)
+  40020860  →  40020860-i   (Bend 87.5 DN50)
+  40040860  →  40040860-i   (Bend 87.5 DN110)
+  40020867  →  40020867-i   (Door Bend 87.5 DN50)
+  40040867  →  40040867-i   (Door Bend 87.5 DN110)
+  40040868  →  40040868-i   (Door Bend 87.5 R DN110)
+  40633460  →  40633460-i   (Wye Branch 75x75)
+  40644460  →  40644460-i   (Wye Branch 110x110)
+  40633860  →  40633860-i   (Tee Branch 75x75)
+  14040764860 → 14040764860-i (Swept Tee 160x110)
+  41044857  →  41044857-HM  (Double Swept Door Tee)
+  41264850  →  41264850-i   (Corner Branch 160x110x110)
+  49130060  →  49130060-i   (Inspection Pipe DN75)
+  49140060  →  49140060-i   (Inspection Pipe DN110)
+  41710050  →  41710055-i   (Double Socket DN40)
+  41730050  →  41730050-i   (Double Socket DN75)
+  41740250  →  41740055-i   (Double Socket DN110)
+  41720055  →  41720055-i   (OWS DN50)
+  42143050  →  42143050-i   (Reducer 110x75)
+  41620050  →  41620050-i   (End Cap DN50)
+  41630050  →  41630050-i   (End Cap DN75)
+  41640050  →  41640050-i   (End Cap DN110)
+  41242850  →  41242850-i   (Height Riser 90 Deg)
+  60203651  →  60203651-i   (Height Riser Thread Lock)
+
+═══════════════════════════════════════════════════════════
