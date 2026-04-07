@@ -546,74 +546,88 @@ def make_bold(cell):
     except Exception:
         cell.font = Font(bold=True)
 
-# ── BUILD NUMERIC LOOKUP ───────────────────────────────────────────────────────
-# Your Excel stores codes as plain numbers (e.g. 7070622470, not 7070622470-i)
-# So we build TWO lookups: one for string match, one for numeric match (strip -i/-B/-S etc.)
+# ── BUILD LOOKUP TABLES ────────────────────────────────────────────────────────
 
-def normalise(code_str):
-    """Strip suffixes like -i, -I, -B, -S, -b, -s, -HM, -ES, -L, -C for numeric matching."""
-    s = str(code_str).strip()
-    for suffix in ["-i","-I","-B","-b","-S","-s","-HM","-hm","-ES","-es",
-                   "-L","-l","-C","-c"," B-i"," G-i"," B-I"," G-I"]:
-        if s.endswith(suffix):
-            s = s[:-len(suffix)].strip()
+SUFFIXES = ["-i","-I","-B","-b","-S","-s","-HM","-hm","-ES","-es",
+            "-L","-l","-C","-c"," B-i"," G-i"," B-I"," G-I",
+            " b-i"," g-i"," b-I"," g-I"]
+
+def strip_suffix(s):
+    """Remove known suffixes so 40010460-i → 40010460"""
+    s = s.strip()
+    for sfx in sorted(SUFFIXES, key=len, reverse=True):
+        if s.endswith(sfx):
+            return s[:-len(sfx)].strip()
     return s
 
-# Primary lookup: exact string (with suffix)
+# Lookup 1: exact upper-case string  e.g. "40010460" → entry
 STR_LOOKUP = {}
-for old_k, v in MAPPING.items():
-    STR_LOOKUP[old_k.strip().upper()] = (old_k, v)
+for _k, _v in MAPPING.items():
+    STR_LOOKUP[_k.strip().upper()] = (_k, _v)
 
-# Secondary lookup: normalised numeric string (no suffix)
-NUM_LOOKUP = {}
-for old_k, v in MAPPING.items():
-    n = normalise(old_k).upper()
-    if n not in NUM_LOOKUP:          # first match wins
-        NUM_LOOKUP[n] = (old_k, v)
+# Lookup 2: suffix-stripped upper string  e.g. "40010460-I" → via "40010460"
+BARE_LOOKUP = {}
+for _k, _v in MAPPING.items():
+    _bare = strip_suffix(_k).upper()
+    if _bare not in BARE_LOOKUP:
+        BARE_LOOKUP[_bare] = (_k, _v)
 
-# Tertiary: integer value lookup (for cells Excel stores as int)
+# Lookup 3: integer  e.g. 40010460 (numeric cell)
 INT_LOOKUP = {}
-for old_k, v in MAPPING.items():
-    n = normalise(old_k)
+for _k, _v in MAPPING.items():
+    _bare = strip_suffix(_k)
     try:
-        INT_LOOKUP[int(float(n))] = (old_k, v)
-    except ValueError:
+        INT_LOOKUP[int(float(_bare))] = (_k, _v)
+    except (ValueError, TypeError):
         pass
+
+def is_formula(cell):
+    """True if the cell contains a formula — must NEVER be touched."""
+    if cell.data_type == 'f':
+        return True
+    if isinstance(cell.value, str) and cell.value.strip().startswith('='):
+        return True
+    return False
 
 def find_code(cell_val):
     """
-    Returns (old_key, (new_code, desc, old_price, new_price)) or None.
-    Handles: string with suffix, string without suffix, integer, float.
+    Match cell value against MAPPING.
+    Returns (old_key, mapping_tuple) or None.
+    Handles: exact string, suffix-stripped string, integer/float cells.
     """
     if cell_val is None:
         return None
 
-    # ── Try as integer first (most common in your Excel) ──
+    # ── Numeric cell (Excel stores the code as a number e.g. 7070622470) ──
     if isinstance(cell_val, (int, float)):
         iv = int(cell_val)
         if iv in INT_LOOKUP:
             return INT_LOOKUP[iv]
-        # also try as string of that number
+        # also try as bare string
         sv = str(iv).upper()
-        if sv in NUM_LOOKUP:
-            return NUM_LOOKUP[sv]
+        if sv in STR_LOOKUP:
+            return STR_LOOKUP[sv]
+        if sv in BARE_LOOKUP:
+            return BARE_LOOKUP[sv]
         return None
 
-    # ── Try as string ──
+    # ── String cell ──
     s = str(cell_val).strip()
     if not s:
         return None
 
-    # Exact match (with suffix like -i)
-    if s.upper() in STR_LOOKUP:
-        return STR_LOOKUP[s.upper()]
+    su = s.upper()
 
-    # Normalised match (without suffix)
-    n = normalise(s).upper()
-    if n in NUM_LOOKUP:
-        return NUM_LOOKUP[n]
+    # 1. Exact match  "54040300-i" → found
+    if su in STR_LOOKUP:
+        return STR_LOOKUP[su]
 
-    # Try as integer
+    # 2. Suffix-stripped match  "54040300-I" → strip → "54040300" → found
+    bare = strip_suffix(s).upper()
+    if bare in BARE_LOOKUP:
+        return BARE_LOOKUP[bare]
+
+    # 3. Numeric string  "40010460" → int → found
     try:
         iv = int(float(s))
         if iv in INT_LOOKUP:
@@ -623,21 +637,40 @@ def find_code(cell_val):
 
     return None
 
+# ── PRICE MATCHING HELPERS ─────────────────────────────────────────────────────
+
+def price_matches(cell_val, old_price):
+    """
+    Returns True if cell_val looks like old_price.
+    Tolerates ±5% variation (handles discounts, rounding, GST-exclusive vs inclusive).
+    """
+    if cell_val is None:
+        return False
+    if isinstance(cell_val, str) and cell_val.strip().startswith('='):
+        return False      # formula — never touch
+    try:
+        pval = float(str(cell_val).replace(',', '').replace(' ', ''))
+        tol  = max(5, old_price * 0.05)   # 5% tolerance, minimum ₹5
+        return abs(pval - old_price) <= tol
+    except (ValueError, TypeError):
+        return False
+
 # ── MAIN PROCESSING ────────────────────────────────────────────────────────────
 def process_workbook(uploaded_bytes):
-    wb = load_workbook(io.BytesIO(uploaded_bytes))
-    log = []
+    # Load workbook — keep formulas as strings, preserve all formatting
+    wb = load_workbook(io.BytesIO(uploaded_bytes), data_only=False)
+    log          = []
     total_codes  = 0
     total_prices = 0
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        max_col = ws.max_column
 
-        for row in ws.iter_rows():
-            for cell in row:
-                # Skip formula cells
-                if cell.data_type == 'f':
+        for row_cells in ws.iter_rows():
+            for cell in row_cells:
+
+                # ── Skip formulas completely ──
+                if is_formula(cell):
                     continue
 
                 result = find_code(cell.value)
@@ -646,51 +679,41 @@ def process_workbook(uploaded_bytes):
 
                 old_key, (new_code, desc, old_price, new_price) = result
 
-                # ── Store original value for log ──
-                original_val = cell.value
-                code_changed = (normalise(str(original_val)) != normalise(new_code))
+                original_val = str(cell.value).strip()
+                code_changed = (original_val.upper() != new_code.strip().upper())
 
-                # ── Update the code cell ──
+                # ── 1. Update the CODE cell → yellow highlight ──
                 cell.value = new_code
                 cell.fill  = YELLOW_FILL
                 total_codes += 1
 
-                # ── Look for price in adjacent cells (right side: +1, +2, +3 columns) ──
-                # Based on your BOQ format: Code | Rate | Pack Size | ...
+                # ── 2. Update PRICE in the same row ──
+                # Search ENTIRE row (both left and right of code column).
+                # Skip: formula cells, the code cell itself, text/empty cells.
                 price_updated = False
                 if new_price is not None and old_price is not None:
-                    for offset in range(1, 6):   # check next 5 columns to the right
-                        pcol = cell.column + offset
-                        if pcol > max_col:
-                            break
-                        pcell = ws.cell(row=cell.row, column=pcol)
-                        if pcell.data_type == 'f':  # formula — skip
-                            continue
-                        if pcell.value is None:
-                            continue
-                        try:
-                            pval = float(str(pcell.value).replace(',', ''))
-                            # Match old price with ±2 tolerance
-                            if abs(pval - old_price) <= 2:
-                                pcell.value = new_price
-                                make_bold(pcell)
-                                pcell.fill = YELLOW_FILL
-                                total_prices += 1
-                                price_updated = True
-                                break
-                        except (ValueError, TypeError):
-                            continue
+                    for pcell in row_cells:
+                        if pcell.column == cell.column:
+                            continue               # skip the code cell itself
+                        if is_formula(pcell):
+                            continue               # never touch formulas
+                        if price_matches(pcell.value, old_price):
+                            pcell.value = new_price
+                            make_bold(pcell)
+                            pcell.fill  = YELLOW_FILL
+                            total_prices += 1
+                            price_updated = True
+                            break                  # one price update per row
 
                 log.append({
                     "Sheet":         sheet_name,
                     "Row":           cell.row,
-                    "Col":           cell.column,
-                    "Old Code":      str(original_val).strip(),
+                    "Old Code":      original_val,
                     "New Code":      new_code,
-                    "Code Changed":  "✅ Yes" if code_changed else "➡ Same",
-                    "Old Price ₹":   old_price or "—",
-                    "New Price ₹":   new_price or "N/A",
-                    "Price Updated": "✅ Yes" if price_updated else "⚠️ Not found"
+                    "Code Changed":  "✅ Yes" if code_changed else "➡ Same (no suffix change)",
+                    "Old Price ₹":   old_price if old_price else "—",
+                    "New Price ₹":   new_price if new_price else "N/A",
+                    "Price Updated": "✅ Yes" if price_updated else "⚠️ Price not found in row",
                 })
 
     return wb, log, total_codes, total_prices
