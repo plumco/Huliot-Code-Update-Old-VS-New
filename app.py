@@ -3,7 +3,6 @@ import openpyxl
 from openpyxl.styles import PatternFill, Font
 from openpyxl import load_workbook
 import io
-import copy
 
 st.set_page_config(page_title="Huliot Code & Price Updater", page_icon="🔧", layout="wide")
 
@@ -527,91 +526,172 @@ MAPPING = {
 # ── PRICE LOOKUP (by new code too) ────────────────────────────────────────────
 PRICE_2026 = {v[0]: v[3] for v in MAPPING.values() if v[3] is not None}
 
-# ── HELPER: Check if cell value matches a known old code ──────────────────────
-def find_matching_code(cell_val):
-    if cell_val is None:
-        return None
-    s = str(cell_val).strip()
-    if s in MAPPING:
-        return s
-    # case-insensitive
-    s_lower = s.lower()
-    for k in MAPPING:
-        if k.lower() == s_lower:
-            return k
-    return None
 
 YELLOW_FILL = PatternFill("solid", start_color="FFFF00")
-BOLD_FONT_CACHE = {}
+BOLD_YELLOW_FILL = PatternFill("solid", start_color="FFFF00")
 
 def make_bold(cell):
-    old = cell.font
-    key = (old.name, old.size, old.color.rgb if old.color and old.color.type == 'rgb' else None,
-           old.italic, old.underline, old.strike)
-    if key not in BOLD_FONT_CACHE:
-        BOLD_FONT_CACHE[key] = Font(
-            name=old.name, size=old.size, bold=True,
-            italic=old.italic, underline=old.underline,
+    """Make cell bold, preserving all other font properties."""
+    try:
+        old = cell.font
+        cell.font = Font(
+            name=old.name or "Calibri",
+            size=old.size or 10,
+            bold=True,
+            italic=old.italic,
+            underline=old.underline,
             strike=old.strike,
-            color=old.color.rgb if old.color and old.color.type == 'rgb' else "000000"
+            color=old.color.rgb if (old.color and old.color.type == 'rgb') else "000000"
         )
-    cell.font = BOLD_FONT_CACHE[key]
+    except Exception:
+        cell.font = Font(bold=True)
+
+# ── BUILD NUMERIC LOOKUP ───────────────────────────────────────────────────────
+# Your Excel stores codes as plain numbers (e.g. 7070622470, not 7070622470-i)
+# So we build TWO lookups: one for string match, one for numeric match (strip -i/-B/-S etc.)
+
+def normalise(code_str):
+    """Strip suffixes like -i, -I, -B, -S, -b, -s, -HM, -ES, -L, -C for numeric matching."""
+    s = str(code_str).strip()
+    for suffix in ["-i","-I","-B","-b","-S","-s","-HM","-hm","-ES","-es",
+                   "-L","-l","-C","-c"," B-i"," G-i"," B-I"," G-I"]:
+        if s.endswith(suffix):
+            s = s[:-len(suffix)].strip()
+    return s
+
+# Primary lookup: exact string (with suffix)
+STR_LOOKUP = {}
+for old_k, v in MAPPING.items():
+    STR_LOOKUP[old_k.strip().upper()] = (old_k, v)
+
+# Secondary lookup: normalised numeric string (no suffix)
+NUM_LOOKUP = {}
+for old_k, v in MAPPING.items():
+    n = normalise(old_k).upper()
+    if n not in NUM_LOOKUP:          # first match wins
+        NUM_LOOKUP[n] = (old_k, v)
+
+# Tertiary: integer value lookup (for cells Excel stores as int)
+INT_LOOKUP = {}
+for old_k, v in MAPPING.items():
+    n = normalise(old_k)
+    try:
+        INT_LOOKUP[int(float(n))] = (old_k, v)
+    except ValueError:
+        pass
+
+def find_code(cell_val):
+    """
+    Returns (old_key, (new_code, desc, old_price, new_price)) or None.
+    Handles: string with suffix, string without suffix, integer, float.
+    """
+    if cell_val is None:
+        return None
+
+    # ── Try as integer first (most common in your Excel) ──
+    if isinstance(cell_val, (int, float)):
+        iv = int(cell_val)
+        if iv in INT_LOOKUP:
+            return INT_LOOKUP[iv]
+        # also try as string of that number
+        sv = str(iv).upper()
+        if sv in NUM_LOOKUP:
+            return NUM_LOOKUP[sv]
+        return None
+
+    # ── Try as string ──
+    s = str(cell_val).strip()
+    if not s:
+        return None
+
+    # Exact match (with suffix like -i)
+    if s.upper() in STR_LOOKUP:
+        return STR_LOOKUP[s.upper()]
+
+    # Normalised match (without suffix)
+    n = normalise(s).upper()
+    if n in NUM_LOOKUP:
+        return NUM_LOOKUP[n]
+
+    # Try as integer
+    try:
+        iv = int(float(s))
+        if iv in INT_LOOKUP:
+            return INT_LOOKUP[iv]
+    except (ValueError, TypeError):
+        pass
+
+    return None
 
 # ── MAIN PROCESSING ────────────────────────────────────────────────────────────
 def process_workbook(uploaded_bytes):
     wb = load_workbook(io.BytesIO(uploaded_bytes))
     log = []
-    total_codes = 0
+    total_codes  = 0
     total_prices = 0
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        # Build a map: row → {new_code, new_price} for rows where we find a code
-        code_rows = {}  # row_idx → (old_code, new_code, new_price, col_idx)
+        max_col = ws.max_column
 
         for row in ws.iter_rows():
             for cell in row:
-                if cell.data_type == 'f':  # formula — skip
-                    continue
-                matched = find_matching_code(cell.value)
-                if matched:
-                    new_code, desc, old_price, new_price = MAPPING[matched]
-                    # ── Update code ──
-                    code_changed = str(cell.value).strip() != new_code
-                    cell.value = new_code
-                    cell.fill = YELLOW_FILL
-                    total_codes += 1
-                    code_rows[cell.row] = (matched, new_code, new_price, cell.column)
-                    log.append({
-                        "Sheet": sheet_name,
-                        "Row": cell.row,
-                        "Col": cell.column,
-                        "Old Code": matched,
-                        "New Code": new_code,
-                        "Code Changed": "✅ Yes" if code_changed else "➡ Same",
-                        "New Price": new_price if new_price else "N/A"
-                    })
-
-        # ── Now scan each flagged row for price cells ──
-        for row_idx, (old_code, new_code, new_price, code_col) in code_rows.items():
-            if new_price is None:
-                continue
-            row_cells = list(ws.iter_rows(min_row=row_idx, max_row=row_idx, values_only=False))[0]
-            for cell in row_cells:
+                # Skip formula cells
                 if cell.data_type == 'f':
-                    continue  # don't touch formulas
-                if cell.value is None:
                     continue
-                try:
-                    val = float(str(cell.value).replace(',',''))
-                    # Check if it looks like the old price (within ±1 tolerance)
-                    old_p = MAPPING[old_code][2]
-                    if old_p and abs(val - old_p) <= 1:
-                        cell.value = new_price
-                        make_bold(cell)
-                        total_prices += 1
-                except (ValueError, TypeError):
-                    pass
+
+                result = find_code(cell.value)
+                if result is None:
+                    continue
+
+                old_key, (new_code, desc, old_price, new_price) = result
+
+                # ── Store original value for log ──
+                original_val = cell.value
+                code_changed = (normalise(str(original_val)) != normalise(new_code))
+
+                # ── Update the code cell ──
+                cell.value = new_code
+                cell.fill  = YELLOW_FILL
+                total_codes += 1
+
+                # ── Look for price in adjacent cells (right side: +1, +2, +3 columns) ──
+                # Based on your BOQ format: Code | Rate | Pack Size | ...
+                price_updated = False
+                if new_price is not None and old_price is not None:
+                    for offset in range(1, 6):   # check next 5 columns to the right
+                        pcol = cell.column + offset
+                        if pcol > max_col:
+                            break
+                        pcell = ws.cell(row=cell.row, column=pcol)
+                        if pcell.data_type == 'f':  # formula — skip
+                            continue
+                        if pcell.value is None:
+                            continue
+                        try:
+                            pval = float(str(pcell.value).replace(',', ''))
+                            # Match old price with ±2 tolerance
+                            if abs(pval - old_price) <= 2:
+                                pcell.value = new_price
+                                make_bold(pcell)
+                                pcell.fill = YELLOW_FILL
+                                total_prices += 1
+                                price_updated = True
+                                break
+                        except (ValueError, TypeError):
+                            continue
+
+                log.append({
+                    "Sheet":         sheet_name,
+                    "Row":           cell.row,
+                    "Col":           cell.column,
+                    "Old Code":      str(original_val).strip(),
+                    "New Code":      new_code,
+                    "Code Changed":  "✅ Yes" if code_changed else "➡ Same",
+                    "Old Price ₹":   old_price or "—",
+                    "New Price ₹":   new_price or "N/A",
+                    "Price Updated": "✅ Yes" if price_updated else "⚠️ Not found"
+                })
 
     return wb, log, total_codes, total_prices
 
