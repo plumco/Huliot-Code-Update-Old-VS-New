@@ -1,6 +1,6 @@
 import streamlit as st
 import openpyxl
-from openpyxl.styles import PatternFill, Font, copy as style_copy
+from openpyxl.styles import PatternFill, Font
 from openpyxl import load_workbook
 import io
 import copy
